@@ -1,0 +1,204 @@
+% Scenario A1: Episode Creation Performance
+
+T = readtable('a1_episode_creation_samples.csv');
+
+Ns = unique(T.N);
+
+mean_latency = zeros(size(Ns));
+std_latency  = zeros(size(Ns));
+count        = zeros(size(Ns));
+ci95         = zeros(size(Ns));
+
+for i = 1:length(Ns)
+    samples = T.latency_ms(T.N == Ns(i));
+    mean_latency(i) = mean(samples);
+    std_latency(i)  = std(samples);
+    count(i)        = length(samples);
+
+    sem = std_latency(i) / sqrt(count(i));
+    ci95(i) = 1.96 * sem;   % 95% confidence interval
+end
+
+summary = table(Ns, mean_latency, std_latency, count, ci95)
+
+figure('Units','inches','Position',[1 1 5 3.5]);
+
+errorbar(Ns, mean_latency, ci95, '-o', ...
+         'LineWidth', 1.5, 'MarkerSize', 8, 'CapSize', 6);
+
+grid on;
+xlabel('Number of records in new episode (N)');
+ylabel('Episode creation cryptographic processing latency (ms)');
+
+
+set(gca, 'FontSize', 12);
+set(gcf, 'PaperPositionMode', 'auto');
+
+print(gcf, 'scenario_A1_episode_creation_latency.pdf', '-dpdf', '-painters');
+
++++
+
+% Scenario A2: Patient Access Latency
+T = readtable('a2_patient_access_samples.csv');
+
+Ns = unique(T.N);
+mean_latency = zeros(size(Ns));
+ci95 = zeros(size(Ns));
+
+for i = 1:length(Ns)
+    samples = T.latency_ms(T.N == Ns(i));
+    mean_latency(i) = mean(samples);
+    sem = std(samples) / sqrt(length(samples));
+    ci95(i) = 1.96 * sem;   % 95% confidence interval
+end
+
+% Create figure with controlled size (important for papers)
+figure('Units','inches','Position',[1 1 5 3.5]);
+
+errorbar(Ns, mean_latency, ci95, '-o', ...
+    'LineWidth', 1.5, 'MarkerSize', 8);
+grid on;
+
+xlabel('Number of records in episode (N)');
+ylabel('Patient access cryptographic processing latency (ms)');
+
+
+set(gca, 'FontSize', 12);
+
+% ---- Save as PDF ----
+set(gcf, 'PaperPositionMode', 'auto');
+print(gcf, 'scenario_A2_patient_access_latency.pdf', '-dpdf', '-painters');
+
++++
+% Scenario A3: Episode Update (Append One Record)
+
+T = readtable('a3_episode_update_samples.csv');
+
+Ns = unique(T.N_existing);
+mean_latency = zeros(size(Ns));
+
+for i = 1:length(Ns)
+    samples = T.append1_latency_ms(T.N_existing == Ns(i));
+    mean_latency(i) = mean(samples);
+end
+
+% Create figure with controlled size (important for papers)
+figure('Units','inches','Position',[1 1 5 3.5]);
+
+plot(Ns, mean_latency, '-o', ...
+     'LineWidth', 1.5, 'MarkerSize', 8);
+grid on;
+
+xlabel('Existing episode size (number of records)');
+ylabel('Append cryptographic processing latency (ms)');
+
+% ---- Fix visualization: anchor y-axis at zero ----
+ylim([0 15]);
+
+set(gca, 'FontSize', 12);
+
+% ---- Save as PDF ----
+set(gcf, 'PaperPositionMode', 'auto');
+print(gcf, 'scenario_A3_episode_update_latency.pdf', '-dpdf', '-painters');
+
++++
+% Scenario A4(b): Patient Delegation (ReKeyGen)
+
+T = readtable('a4b_rekeygen_samples.csv');
+
+Svals = unique(T.S);   % number of shared labels
+mean_latency = zeros(size(Svals));
+ci95 = zeros(size(Svals));
+
+for i = 1:length(Svals)
+    samples = T.total_latency_ms(T.S == Svals(i));
+    mean_latency(i) = mean(samples);
+    sem = std(samples) / sqrt(length(samples));
+    ci95(i) = 1.96 * sem;   % 95% confidence interval
+end
+
+% Create figure with controlled size (consistent with A1–A3)
+figure('Units','inches','Position',[1 1 5 3.5]);
+
+errorbar(Svals, mean_latency, ci95, '-o', ...
+         'LineWidth', 1.5, 'MarkerSize', 8);
+grid on;
+
+xlabel('Number of shared record labels (S)');
+ylabel('Patient delegation cryptographic processing latency (ms)');
+
+set(gca, 'FontSize', 12);
+
+% Optional: anchor at zero (recommended for clarity)
+ylim([0, max(mean_latency)*1.1]);
+
+% ---- Save as PDF ----
+set(gcf, 'PaperPositionMode', 'auto');
+print(gcf, 'scenario_A4b_patient_delegation_latency.pdf', '-dpdf', '-painters');
+
++++
+
+% Scenario A4(b): Patient Delegation (ReKeyGen)
+
+T = readtable('a4b_rekeygen_samples.csv');
+
+Svals = unique(T.S_shared);
+mean_latency = zeros(size(Svals));
+ci95 = zeros(size(Svals));
+
+for i = 1:length(Svals)
+    samples = T.rekey_total_ms(T.S_shared == Svals(i));
+    mean_latency(i) = mean(samples);
+    sem = std(samples) / sqrt(length(samples));
+    ci95(i) = 1.96 * sem;   % 95% CI
+end
+
+figure('Units','inches','Position',[1 1 5 3.5]);
+
+errorbar(Svals, mean_latency, ci95, '-o', ...
+         'LineWidth', 1.5, 'MarkerSize', 8);
+grid on;
+
+xlabel('Number of shared record labels (S)');
+ylabel('Patient delegation cryptographic processing latency (ms)');
+
+set(gca, 'FontSize', 12);
+ylim([0, max(mean_latency)*1.1]);
+
+set(gcf, 'PaperPositionMode', 'auto');
+print(gcf, 'scenario_A4b_patient_delegation_latency.pdf', '-dpdf', '-painters');
+
++++
+
+% Scenario B1: Emergency (Evidence-Driven) Access — Crypto Only
+T = readtable('b1_emergency_access_samples.csv');
+
+Evals = unique(T.E_release);
+mean_latency = zeros(size(Evals));
+ci95 = zeros(size(Evals));
+
+for i = 1:length(Evals)
+    samples = T.latency_ms(T.E_release == Evals(i));
+    mean_latency(i) = mean(samples);
+    sem = std(samples) / sqrt(length(samples));
+    ci95(i) = 1.96 * sem;   % 95% confidence interval
+end
+
+% Create figure with controlled size (consistent with A1–A4)
+figure('Units','inches','Position',[1 1 5 3.5]);
+
+errorbar(Evals, mean_latency, ci95, '-o', ...
+    'LineWidth', 1.5, 'MarkerSize', 8);
+grid on;
+
+xlabel('Number of released records under emergency scope (E)');
+ylabel('Emergency cryptographic processing latency (ms)');
+
+set(gca, 'FontSize', 12);
+
+% Optional: anchor at zero for clearer interpretation
+ylim([0, max(mean_latency)*1.1]);
+
+% ---- Save as PDF ----
+set(gcf, 'PaperPositionMode', 'auto');
+print(gcf, 'scenario_B1_emergency_access_latency.pdf', '-dpdf', '-painters');
