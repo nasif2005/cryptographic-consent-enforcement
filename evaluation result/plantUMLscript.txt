@@ -1,0 +1,395 @@
+### title Figure 1: Sequence diagram for author-side episode creation and initial record insertion
+
+@startuml
+title Figure 1: Sequence diagram for author-side episode creation and initial record insertion
+
+participant "HP Module" as HP
+participant "IPFS" as IPFS
+participant "HRR Controller\n(partially trusted)" as HRR
+database "Health Record Database" as DB
+
+' --- Step 1: Local record preparation, encryption, and wrapper generation ---
+HP -> HP: Prepare new clinical record
+note right of HP
+Generate fresh identifiers:
+  episode_id = GenerateFreshEpisodeID()
+  record_id  = GenerateFreshRecordID()
+
+Construct record_label =
+  (episode_id, record_type, record_id)
+
+Generate symmetric content key:
+  k = GenSymKey()
+
+Encrypt record locally:
+  ct_label = AEAD.Enc(k, n, record_text; record_label)
+
+Generate label-bound key wrappers:
+  w_pt^label  = Wrap(pk_pt,  k; record_label)
+  w_hp^label  = Wrap(pk_hp,  k; record_label)
+  w_eaa^label = Wrap(pk_eaa, k; record_label)
+end note
+
+' --- Step 2: Upload encrypted record content to IPFS ---
+HP -> IPFS: Upload ct_label
+IPFS --> HP: cid_ct_label
+
+' --- Step 3: Build local manifest and wrapper set ---
+HP -> HP: Build episode manifest and wrapper set
+note right of HP
+Construct episode_manifest_episode_id containing:
+  - record_label
+  - cid_ct_label
+  - record metadata / ordering data
+
+Construct keywrappers_episode_id containing:
+  - w_pt^label
+  - w_hp^label
+  - w_eaa^label
+end note
+
+' --- Step 4: Upload manifest to IPFS ---
+HP -> IPFS: Upload episode_manifest_episode_id
+IPFS --> HP: cid_episode_manifest_episode_id
+
+' --- Step 5: Register metadata and wrappers at HRR ---
+HP -> HRR: RegisterEpisode(\n  episode_id,\n  patient_id,\n  episode_tags,\n  cid_episode_manifest_episode_id,\n  keywrappers_episode_id,\n  timestamp\n)
+
+note right of HRR
+Stores:
+  - episode metadata
+  - wrapper set
+  - content references
+
+Does not access plaintext
+record content under the
+stated threat model.
+end note
+
+' --- Step 6: Persist repository state ---
+HRR -> DB: Store(\n  episode_id,\n  patient_id,\n  episode_tags,\n  cid_episode_manifest_episode_id,\n  keywrappers_episode_id,\n  timestamp\n)
+
+@enduml
+
+
+
+### title Figure 2: Sequence diagram for the Episode Update workflow
+
+@startuml
+title Figure 2: Sequence diagram for the author-side episode update workflow
+
+participant "HP Module" as HP
+participant "IPFS" as IPFS
+participant "HRR Controller\n(partially trusted)" as HRR
+database "Health Record Database" as DB
+
+' --- Step 1: Retrieve current episode state ---
+HP -> HRR: UpdateRequest(patient_id,\n episode_id)
+HRR -> DB: LookupEpisode(episode_id,\n patient_id)
+DB --> HRR: cid_episode_manifest_current,\n episode_tags
+HRR --> HP: UpdateContext(\n cid_episode_manifest_current,\n episode_tags)
+
+' --- Step 2: Resolve current manifest ---
+HP -> IPFS: FetchManifest(cid_episode_manifest_current)
+IPFS --> HP: episode_manifest_current
+
+' --- Step 3: Prepare new record and wrappers locally ---
+HP -> HP: Create new record for existing episode
+note right of HP
+Generate fresh record_id = GenerateFreshRecordID()
+
+Construct record_label =
+  (episode_id, record_type, record_id)
+
+Generate symmetric content key:
+  k = GenSymKey()
+
+Encrypt record locally:
+  ct_label = AEAD.Enc(k, n, record_text; record_label)
+
+Generate label-bound key wrappers:
+  w_pt^label  = Wrap(pk_pt,  k; record_label)
+  w_hp^label  = Wrap(pk_hp,  k; record_label)
+  w_eaa^label = Wrap(pk_eaa, k; record_label)
+end note
+
+' --- Step 4: Upload new ciphertext ---
+HP -> IPFS: Upload ct_label
+IPFS --> HP: cid_ct_label
+
+' --- Step 5: Update manifest locally ---
+HP -> HP: Append new record entry to episode manifest
+note right of HP
+Update episode_manifest_episode_id with:
+  - record_label
+  - cid_ct_label
+  - record metadata / ordering data
+
+Update keywrappers_episode_id with:
+  - w_pt^label
+  - w_hp^label
+  - w_eaa^label
+end note
+
+' --- Step 6: Upload updated manifest ---
+HP -> IPFS: Upload updated episode_manifest_episode_id
+IPFS --> HP: cid_episode_manifest_updated
+
+' --- Step 7: Register updated metadata and wrappers ---
+HP -> HRR: RegisterEpisodeUpdate(\n  episode_id,\n  patient_id,\n  episode_tags,\n  cid_episode_manifest_updated,\n  keywrappers_episode_id,\n  timestamp\n)
+
+note right of HRR
+Stores updated:
+  - episode metadata
+  - wrapper set
+  - content references
+
+Does not access plaintext
+record content under the
+stated assumptions.
+end note
+
+' --- Step 8: Atomic repository update ---
+HRR -> DB: AtomicUpdateEpisodeState(\n  episode_id,\n  patient_id,\n  episode_tags,\n  cid_episode_manifest_updated,\n  keywrappers_episode_id,\n  timestamp\n)
+
+note right of DB
+Atomicity requirement:
+  insert/update wrapper material and
+  update the current manifest pointer
+  in one commit; otherwise prior state
+  remains unchanged.
+end note
+
+@enduml
+
+
+
+### Figure 3: Sequence diagram for the Episode Access workflow
+
+@startuml
+title Figure 3: Sequence diagram for the patient-side direct access workflow
+
+participant "Patient Module" as PT
+participant "HRR Controller\n(partially trusted)" as HRR
+database "Health Record Database" as DB
+participant "IPFS" as IPFS
+
+' --- Step 1: Access request initiation ---
+PT -> HRR: AccessRequest(patient_id,\n episode_id,\n record_label)
+
+' --- Step 2: Manifest reference and wrapper lookup ---
+HRR -> DB: LookupEpisode(episode_id,\n patient_id)
+DB --> HRR: cid_episode_manifest
+
+HRR -> DB: GetPatientKeyWrapper(episode_id,\n record_label)
+DB --> HRR: w_pt^label
+
+' --- Step 3: Metadata response to patient ---
+HRR --> PT: AccessResponse(\n cid_episode_manifest,\n w_pt^label)
+
+' --- Step 4: Manifest resolution ---
+PT -> IPFS: FetchManifest(cid_episode_manifest)
+IPFS --> PT: episode_manifest
+PT -> PT: Resolve cid_ct_label from episode_manifest
+
+' --- Step 5: Encrypted record retrieval ---
+PT -> IPFS: FetchCiphertext(cid_ct_label)
+IPFS --> PT: ct_label
+
+' --- Step 6: Local decryption ---
+note right of PT
+Local decryption:
+1. k_label = Unwrap(sk_pt, w_pt^label; record_label)
+2. record_text = AEAD.Dec(k_label, n, ct_label; record_label)
+end note
+
+@enduml
+
+
+
+### Figure 4: Consent-Based Delegation workflow (Part A: Delegation setup)
+
+@startuml
+title Figure 4: Consent-based delegation workflow (Part A: delegation setup)
+
+participant "Patient Module" as PT
+participant "HRR Controller\n(partially trusted)" as HRR
+participant "CBAC Framework\n(CPAP → CCAM → CPR)" as CBAC
+database "Health Record Database" as DB
+participant "HP Module (Delegate)" as HPD
+
+' --- Step 1: Submit consent directive ---
+PT -> HRR: SubmitConsentDirective(C)
+
+' --- Step 2: Validate and register policy state ---
+HRR -> CBAC: ValidatePreCommit(C)
+CBAC -> CBAC: CPAP → CCAM → CPR\nValidate and store consent policy
+CBAC --> HRR: policy_id,\n authorized_label_set
+
+' --- Step 3: Return validated policy context ---
+HRR --> PT: policy_id,\n authorized_label_set
+
+' --- Step 4: Generate delegation material locally ---
+PT -> PT: Generate delegation material for authorized labels
+note right of PT
+For each label in authorized_label_set:
+
+  rk_pt→hp_d^label = ReKeyGen(
+    sk_pt, pk_hp_d ; label
+  )
+
+Construct delegation material:
+  { (label, rk_pt→hp_d^label) }
+end note
+
+' --- Step 5: Register delegation state ---
+PT -> HRR: RegisterDelegation(\n  policy_id,\n  patient_id,\n  delegate_id,\n  authorized_label_set,\n  {rk_pt→hp_d^label}\n)
+
+' --- Step 6: Persist delegation record ---
+HRR -> DB: StoreDelegation(\n  policy_id,\n  patient_id,\n  delegate_id,\n  authorized_label_set,\n  {rk_pt→hp_d^label}\n)
+
+' --- Step 7: Construct delegation token locally ---
+PT -> PT: DT = Sig_pt(\n  delegate_id,\n  policy_id,\n  authorized_label_set,\n  timestamp\n)
+
+' --- Step 8: Send delegation token to delegate ---
+PT --> HPD: SendDelegationToken(DT)
+
+@enduml
+
+
+
+### Figure 5: Consent-Based Delegation workflow (Part B: Delegated access)
+
+@startuml
+title Figure 5: Consent-based delegation workflow (Part B: delegated access)
+
+participant "HP Module (Delegate)" as HPD
+participant "HRR Controller\n(partially trusted)" as HRR
+participant "CBAC Framework\n(CPR state)" as CBAC
+database "Health Record Database" as DB
+participant "IPFS" as IPFS
+
+' --- Step 1: Delegated access request ---
+HPD -> HRR: DelegatedAccessRequest(DT,\n record_label)
+
+' --- Step 2: Verify token and policy-governed scope ---
+HRR -> HRR: Verify DT signature
+HRR -> CBAC: CheckPolicyStatus(policy_id,\n validity_interval)
+CBAC --> HRR: policy active
+HRR -> HRR: Check record_label ∈ DT.authorized_label_set
+
+' --- Step 3: Retrieve delegation state and patient wrapper ---
+HRR -> DB: GetDelegation(policy_id,\n patient_id,\n delegate_id)
+DB --> HRR: authorized_label_set,\n {rk_pt→hp_d^label}
+
+HRR -> HRR: Confirm record_label ∈ authorized_label_set
+
+HRR -> DB: GetPatientKeyWrapper(episode_id,\n record_label)
+DB --> HRR: w_pt^label
+
+' --- Step 4: Proxy re-encrypt wrapper for delegate ---
+HRR -> HRR: w_hp_d^label = ReEnc(\n rk_pt→hp_d^label,\n w_pt^label)
+
+' --- Step 5: Retrieve manifest reference ---
+HRR -> HRR: Parse episode_id from record_label
+HRR -> DB: LookupEpisodeManifestRef(\n patient_id,\n episode_id)
+DB --> HRR: cid_episode_manifest
+
+' --- Step 6: Return delegated access materials ---
+HRR --> HPD: DelegatedResponse(\n cid_episode_manifest,\n w_hp_d^label)
+
+' --- Step 7: Manifest and ciphertext retrieval ---
+HPD -> IPFS: FetchManifest(cid_episode_manifest)
+IPFS --> HPD: episode_manifest
+HPD -> HPD: Resolve cid_ct_label from episode_manifest
+HPD -> IPFS: FetchCiphertext(cid_ct_label)
+IPFS --> HPD: ct_label
+
+' --- Step 8: Local decryption by delegate ---
+note right of HPD
+Local decryption:
+1. k_label = Unwrap(sk_hp_d, w_hp_d^label; record_label)
+2. record_text = AEAD.Dec(k_label, n, ct_label; record_label)
+end note
+
+@enduml
+
+
+
+### Figure 6: Sequence diagram for the authority-mediated emergency access workflow
+
+@startuml
+title Figure 6: Sequence diagram for the authority-mediated emergency access workflow
+
+participant "Emergency Clinician" as DR
+participant "HRR Controller\n(partially trusted)" as HRR
+participant "ECDM\n(CBAC emergency scope module)" as ECDM
+participant "EAA" as EAA
+database "Health Record Database" as DB
+participant "IPFS" as IPFS
+
+' --- Step 1: Emergency request submission ---
+DR -> HRR: EmergencyRequest(requester_id,\n patient_id,\n Ev)
+note right of DR
+Ev = evidence bundle
+(vitals, triage, observations)
+end note
+
+' --- Step 2: Emergency scope derivation ---
+HRR -> ECDM: DeriveEmergencyScope(Ev)
+ECDM --> HRR: S_em,\n T_em
+note right of HRR
+S_em = inferred emergency clinical state
+T_em = authorized emergency semantic tag set
+end note
+
+' --- Step 3: Emergency authorization ---
+HRR -> HRR: evidence_hash = H(Ev)
+HRR -> EAA: EmergencyAuthorize(\n requester_id,\n patient_id,\n evidence_hash,\n metadata,\n T_em\n)
+
+EAA -> EAA: Verify emergency claim\nEvaluate policy and controls
+EAA --> HRR: EOT = Sig_eaa(\n eot_id,\n requester_id,\n patient_id,\n T_em,\n validity\n)
+
+' --- Step 4: Episode matching and label derivation ---
+HRR -> DB: QueryEpisodes(\n patient_id,\n episode_tags match T_em\n)
+DB --> HRR: matched_episodes,\n manifest_refs
+
+HRR -> DB: SelectEmergencyWrappers(matched_episodes)
+DB --> HRR: { (record_label, w_eaa^label) }
+
+HRR -> HRR: Derive eligible label set L_em\nfrom matched episode wrappers
+
+' --- Step 5: Emergency key transformation ---
+loop for each eligible record_label in L_em
+  HRR -> EAA: TransformKey(\n record_label,\n w_eaa^label,\n EOT\n)
+
+  EAA -> EAA: Verify(EOT)\nCheck validity
+  EAA -> EAA: Confirm record_label ∈ L_em
+  EAA -> EAA: k_label = Unwrap(sk_eaa, w_eaa^label; record_label)
+  EAA -> EAA: w_dr^label = Wrap(pk_dr, k_label; record_label)
+  EAA --> HRR: w_dr^label
+end
+
+' --- Step 6: Response to emergency clinician ---
+HRR --> DR: EmergencyResponse(\n {(record_label, w_dr^label)},\n {manifest_refs}\n)
+
+' --- Step 7: Manifest and ciphertext retrieval ---
+loop for each returned manifest reference
+  DR -> IPFS: FetchManifest(manifest_ref)
+  IPFS --> DR: episode_manifest
+end
+
+DR -> DR: Resolve ciphertext references\nfor authorized record labels
+
+loop for each authorized record_label
+  DR -> IPFS: FetchCiphertext(cid_ct_label)
+  IPFS --> DR: ct_label
+end
+
+note right of DR
+Local decryption:
+1. k_label = Unwrap(sk_dr, w_dr^label; record_label)
+2. record_text = AEAD.Dec(k_label, n, ct_label; record_label)
+end note
+
+@enduml
